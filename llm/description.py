@@ -84,9 +84,9 @@ SAFETY CONSTRAINTS:
 # ---------------------------------------------------------
 # CACHED LLM CALL (Used by ALL modes)
 # ---------------------------------------------------------
-@st.cache_data(show_spinner=False)
-def cached_reaction_description(
-    task_type: str,
+
+def ai_description(
+    task_type,
     _inputs,
     _outputs
 ):
@@ -115,7 +115,7 @@ def cached_reaction_description(
             {"role": "user", "content": prompt}
         ],
         temperature=0.35,
-        max_tokens=300
+        max_tokens=500
     )
 
     return response.choices[0].message.content.strip()
@@ -131,4 +131,4 @@ def mol_to_text(mol, fallback_name=None):
 def mol_to_smiles(mol):
     return Chem.MolToSmiles(mol)
 
-    
+

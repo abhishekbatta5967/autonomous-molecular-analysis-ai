@@ -1,18 +1,13 @@
 import streamlit as st
+from rdkit import Chem
+import json
 from chemistry.molecule import load_molecule_cached as load_molecule
-from chemistry.properties import (
-    atomic_properties,
-    structural_properties,
-    identity_properties,
-    predicted_properties
-)
-from ui.viewer import render_molecule_3d
-from llm.description import cached_reaction_description, mol_to_text, mol_to_smiles
-from chemistry.combine import combine_molecules
-from chemistry.decomposition import ring_based_decomposition
-from chemistry.rearrangement import simple_rearrangement
-from chemistry.displacement import single_displacement, double_displacement
-from chemistry.optimization import suggest_modifications
+from chemistry.mode1 import atomic_properties, structural_properties, identity_properties, predicted_properties
+from chemistry.mode2 import combine_molecules, ring_based_decomposition, single_displacement, double_displacement, simple_rearrangement
+from chemistry.mode3 import suggest_modifications
+from ui.ngl_viewer import mol_to_pdb_block, render_ngl_viewer
+from ui.viewer_2d import render_2d_structure
+from llm.description import ai_description, mol_to_text, mol_to_smiles
 
 
 
@@ -39,35 +34,46 @@ with mode_tabs[0]:
             if error:
                 st.error(error)
             else:
+                st.subheader("Molecular Properties")
+                tabs = st.tabs(["Atomic", "Structural", "Predicted"])
+
+                with tabs[0]:
+                    for k, v in identity_properties(name, formula, smiles).items():
+                        st.write(f"**{k}:** {v}")
+                    for k, v in atomic_properties(mol).items():
+                        st.write(f"**{k}:** {v}")
+
+                with tabs[1]:
+                    for k, v in structural_properties(mol).items():
+                        st.write(f"**{k}:** {v}")
+
+                with tabs[2]:
+                    st.info("Predicted properties will be available in the full model")
+                
                 col1, col2 = st.columns(2, gap="large")
 
                 with col1:
-                    st.subheader("Molecular Properties")
-                    tabs = st.tabs(["Atomic", "Structural", "Predicted"])
+                    st.subheader("2D Molecular Structure")
+                    render_2d_structure(mol)
 
-                    with tabs[0]:
-                        for k, v in identity_properties(name, formula, smiles).items():
-                            st.write(f"**{k}:** {v}")
-                        for k, v in atomic_properties(mol).items():
-                            st.write(f"**{k}:** {v}")
-
-                    with tabs[1]:
-                        for k, v in structural_properties(mol).items():
-                            st.write(f"**{k}:** {v}")
-
-                    with tabs[2]:
-                        st.info("Predicted properties will be available in the full model")
+                    st.download_button("Download 2D Img", data=Chem.MolToSmiles(mol), file_name= f"{user_input}.smiles")
 
                 with col2:
-                    st.subheader("3D Molecular Structure")
-                    view = render_molecule_3d(mol)
-                    st.components.v1.html(view._make_html(), height=540)
+                    col1, col2 = st.columns(2, gap="large")
+                    with col1:
+                        st.subheader("3D Molecular Structure")
+                    with col2:
+                        show_labels = st.toggle("Show Atom Labels", value=True)
+                    pdb_block = mol_to_pdb_block(mol)
+                    html = render_ngl_viewer(pdb_block, show_labels=show_labels)
+                    st.components.v1.html(html, height=550)
+                    st.download_button("Download 3D PDB", data=pdb_block, file_name= f"{user_input}.pdb")
 
             st.subheader("🧠 Compound Description (AI Generated)")
 
             with st.spinner("🧪 Interpreting chemical structure..."):
                 input_list = [name, formula, smiles]
-                description = cached_reaction_description("Compound Analysis", input_list, None)
+                description = ai_description("Compound Analysis", input_list, None)
 
             st.write(description)
 
@@ -159,12 +165,23 @@ with mode_tabs[1]:
 
 
                             # ---------- 3D VIEW ----------
-                            st.markdown("### 🧊 3D Combined Structure")
-                            view = render_molecule_3d(combined_mol)
-                            st.components.v1.html(
-                                view._make_html(),
-                                height=520
-                            )
+                            col1, col2 = st.columns(2, gap="large")
+
+                            with col1:
+                                st.subheader("2D Molecular Structure")
+                                render_2d_structure(mol)
+
+                                st.download_button("Download 2D Img", data=Chem.MolToSmiles(mol), file_name= user_input + ".smiles")
+
+                            with col2:
+                                col1, col2 = st.columns(2, gap="large")
+                                with col1:
+                                    st.subheader("3D Molecular Structure")
+                                with col2:
+                                    show_labels = st.toggle("Show Atom Labels", value=True)
+                            pdb_block = mol_to_pdb_block(combined_mol)
+                            html = render_ngl_viewer(pdb_block)
+                            st.components.v1.html(html, height=600)
 
                             # ---------- AI EXPLANATION ----------
 
@@ -181,7 +198,7 @@ with mode_tabs[1]:
 
                             # LLM explanation
                             with st.markdown("🧠 AI Explanation"):
-                                explanation = cached_reaction_description(
+                                explanation = ai_description(
                                     "Combination",
                                     input_list,
                                     output_list,
@@ -213,8 +230,8 @@ with mode_tabs[1]:
 
                         # ---- ORIGINAL MOLECULE ----
                         st.markdown("## 🧬 Original Molecule")
-                        view = render_molecule_3d(mol)
-                        st.components.v1.html(view._make_html(), height=900)
+                        pdb_block = mol_to_pdb_block(mol)
+                        render_ngl_viewer(pdb_block, height=900)
 
                         # ---- RING FRAGMENTS ----
                         if ring_mols:
@@ -223,8 +240,9 @@ with mode_tabs[1]:
                                 st.markdown(f"### Ring {i}")
                                 atomic_properties(r)
                                 structural_properties(r)
-                                view = render_molecule_3d(r)
-                                st.components.v1.html(view._make_html(), height=900)
+                                pdb_block = mol_to_pdb_block(r)
+                                html = render_ngl_viewer(pdb_block)
+                                st.components.v1.html(html, height=600)
                         else:
                             st.info("No ring structures detected.")
 
@@ -233,8 +251,9 @@ with mode_tabs[1]:
                             st.markdown("## 🟢 Chain / Side-Chain Fragment")
                             atomic_properties(chain_mol)
                             structural_properties(chain_mol)
-                            view = render_molecule_3d(chain_mol)
-                            st.components.v1.html(view._make_html(), height=900)
+                            pdb_block = mol_to_pdb_block(chain_mol)
+                            html = render_ngl_viewer(pdb_block)
+                            st.components.v1.html(html, height=600)
 
                         # ---------- AI EXPLANATION ----------
 
@@ -251,7 +270,7 @@ with mode_tabs[1]:
 
                             # LLM explanation
                             with st.subheader("🧠 AI Explanation"):
-                                explanation = cached_reaction_description(
+                                explanation = ai_description(
                                     "Decomposition",
                                     input_list,
                                     output_list
@@ -286,24 +305,28 @@ with mode_tabs[1]:
                         col1, col2 = st.columns(2, gap="large")
                         with col1:
                             st.markdown("### Molecule A")
-                            view = render_molecule_3d(mol_a)
-                            st.components.v1.html(view._make_html(), height=800)
+                            pdb_block = mol_to_pdb_block(mol_a)
+                            html = render_ngl_viewer(pdb_block)
+                            st.components.v1.html(html, height=600)
 
                         with col2:
                             st.markdown("### Molecule BC")
-                            view = render_molecule_3d(mol_bc)
-                            st.components.v1.html(view._make_html(), height=800)
+                            pdb_block = mol_to_pdb_block(mol_bc)
+                            html = render_ngl_viewer(pdb_block)
+                            st.components.v1.html(html, height=600)
 
                         col3, col4 = st.columns(2)
                         with col3:
                             st.markdown("### Product AC")
-                            view = render_molecule_3d(prod_ac)
-                            st.components.v1.html(view._make_html(), height=800)
+                            pdb_block = mol_to_pdb_block(prod_ac)
+                            html = render_ngl_viewer(pdb_block)
+                            st.components.v1.html(html, height=600)
 
                         with col4:
                             st.markdown("### Product B")
-                            view = render_molecule_3d(prod_b)
-                            st.components.v1.html(view._make_html(), height=800)
+                            pdb_block = mol_to_pdb_block(prod_b)
+                            html = render_ngl_viewer(pdb_block)
+                            st.components.v1.html(html, height=600)
 
                             # ---------- AI EXPLANATION ----------
                             name_a = ""
@@ -324,7 +347,7 @@ with mode_tabs[1]:
 
                             # LLM explanation
                             with st.subheader("🧠 AI Explanation"):
-                                explanation = cached_reaction_description(
+                                explanation = ai_description(
                                     "Single Displacement",
                                     input_list,
                                     output_list
@@ -359,24 +382,28 @@ with mode_tabs[1]:
                         col1, col2 = st.columns(2, gap="large")
                         with col1:
                             st.markdown("### Molecule AB")
-                            view = render_molecule_3d(mol_ab)
-                            st.components.v1.html(view._make_html(), height=800)
+                            pdb_block = mol_to_pdb_block(mol_ab)
+                            html = render_ngl_viewer(pdb_block)
+                            st.components.v1.html(html, height=600)
 
                         with col2:
                             st.markdown("### Molecule CD")
-                            view = render_molecule_3d(mol_cd)
-                            st.components.v1.html(view._make_html(), height=800)
+                            pdb_block = mol_to_pdb_block(mol_cd)
+                            html = render_ngl_viewer(pdb_block)
+                            st.components.v1.html(html, height=600)
 
                         col3, col4 = st.columns(2, gap="large")
                         with col3:
                             st.markdown("### Product AD")
-                            view = render_molecule_3d(prod_ad)
-                            st.components.v1.html(view._make_html(), height=800)
+                            pdb_block = mol_to_pdb_block(prod_ad)
+                            html = render_ngl_viewer(pdb_block)
+                            st.components.v1.html(html, height=600)
 
                         with col4:
                             st.markdown("### Product CB")
-                            view = render_molecule_3d(prod_cb)
-                            st.components.v1.html(view._make_html(), height=800)
+                            pdb_block = mol_to_pdb_block(prod_cb)
+                            html = render_ngl_viewer(pdb_block)
+                            st.components.v1.html(html, height=600)
 
                         # ---------- AI EXPLANATION ----------
                             name_ab = ""
@@ -396,7 +423,7 @@ with mode_tabs[1]:
 
                             # LLM explanation
                             with st.subheader("🧠 AI Explanation"):
-                                explanation = cached_reaction_description(
+                                explanation = ai_description(
                                     "Double Displacement",
                                     input_list,
                                     output_list,
@@ -434,15 +461,17 @@ with mode_tabs[1]:
                                 st.markdown("#### Original Structure")
                                 atomic_properties(mol)
                                 structural_properties(mol)
-                                view = render_molecule_3d(mol)
-                                st.components.v1.html(view._make_html(), height=900)
+                                pdb_block = mol_to_pdb_block(mol)
+                                html = render_ngl_viewer(pdb_block)
+                                st.components.v1.html(html, height=600)
 
                             with col2:
                                 st.markdown("#### Rearranged Structure")
                                 atomic_properties(new_mol)
                                 structural_properties(new_mol)
-                                view = render_molecule_3d(new_mol)
-                                st.components.v1.html(view._make_html(), height=900)
+                                pdb_block = mol_to_pdb_block(new_mol)
+                                html = render_ngl_viewer(pdb_block)
+                                st.components.v1.html(html, height=600)
 
                             # ---------- AI EXPLANATION ----------
 
@@ -458,7 +487,7 @@ with mode_tabs[1]:
 
                             # LLM explanation
                             with st.subheader("🧠 AI Explanation"):
-                                explanation = cached_reaction_description(
+                                explanation = ai_description(
                                    "Rearrangement",
                                     input_list,
                                     output_list
@@ -512,11 +541,12 @@ with mode_tabs[2]:
 
                 with col2:
                     st.subheader("3D Molecular Structure")
-                    view = render_molecule_3d(mol)
-                    st.components.v1.html(view._make_html(), height=540)
+                    pdb_block = mol_to_pdb_block(mol)
+                    html = render_ngl_viewer(pdb_block)
+                    st.components.v1.html(html, height=600)
 
             with st.expander("🧠 AI Explanation"):
-                explanation = cached_reaction_description(
+                explanation = ai_description(
                     "Property Optimization",
                     [name, smiles],
                     [goal]
